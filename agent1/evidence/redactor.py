@@ -157,8 +157,13 @@ class Redactor:
             query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
             redacted_pairs = []
             for k, v in query_pairs:
-                if k.lower() in _SENSITIVE_QUERY_PARAMS:
-                    redacted_pairs.append((k, "[REDACTED]"))
+                k_lower = k.lower()
+                if k_lower in _SENSITIVE_QUERY_PARAMS:
+                    # Avoid over-redacting common filter/sort parameters named 'key' with short values
+                    if k_lower == "key" and len(v) <= 8:
+                        redacted_pairs.append((k, v))
+                    else:
+                        redacted_pairs.append((k, "[REDACTED]"))
                 else:
                     redacted_pairs.append((k, v))
 
@@ -187,11 +192,17 @@ class Redactor:
         elif isinstance(val, dict):
             redacted_dict = {}
             for k, v in val.items():
-                if isinstance(k, str) and (
-                    k.lower() in _SENSITIVE_HEADER_KEYS
-                    or k.lower() in _SENSITIVE_QUERY_PARAMS
-                ):
-                    redacted_dict[k] = "[REDACTED]"
+                if isinstance(k, str):
+                    k_lower = k.lower()
+                    if k_lower in _SENSITIVE_HEADER_KEYS:
+                        redacted_dict[k] = "[REDACTED]"
+                    elif k_lower in _SENSITIVE_QUERY_PARAMS:
+                        if k_lower == "key" and isinstance(v, str) and len(v) <= 8:
+                            redacted_dict[k] = v
+                        else:
+                            redacted_dict[k] = "[REDACTED]"
+                    else:
+                        redacted_dict[k] = cls.redact_value(v)
                 else:
                     redacted_dict[k] = cls.redact_value(v)
             return redacted_dict

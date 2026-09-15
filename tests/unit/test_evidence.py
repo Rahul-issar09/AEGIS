@@ -397,6 +397,12 @@ class TestRedactor:
         assert "key=%5BREDACTED%5D" in redacted or "key=[REDACTED]" in redacted
         assert "filter=active" in redacted
 
+    def test_key_param_not_over_redacted_for_short_values(self):
+        """F-06 Regression: Short non-secret parameter key=brand is not redacted."""
+        url = "https://example.test/search?key=brand&q=shoes"
+        result = Redactor.redact_url(url)
+        assert "key=brand" in result
+
     def test_body_password_and_secret_redacted(self):
         body = '{"username": "admin", "password": "secret123", "client_secret": "xyz"}'
         redacted = Redactor.redact_body(body)
@@ -482,3 +488,12 @@ class TestEvidenceRedaction:
         for evidence in all_redacted:
             assert evidence.request.headers["Authorization"] == "[REDACTED]"
             assert "secret-token-123" not in evidence.request.url
+
+    def test_get_all_raw_returns_original_evidence(self):
+        """F-07 Regression: get_all_raw returns unredacted evidence."""
+        collector = EvidenceCollector("scan_001")
+        rr = _make_request_response()
+        collector.collect_request_response(rr)
+        raw_items = collector.get_all_raw()
+        assert len(raw_items) == 1
+        assert "secret-token-123" in raw_items[0].request.url

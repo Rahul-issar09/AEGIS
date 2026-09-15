@@ -219,6 +219,72 @@ class TestBolaEngine:
         finally:
             client.close()
 
+    @respx.mock
+    def test_bola_baseline_201_accepted(self):
+        """F-03 Regression: 201 Created is accepted as valid baseline and BOLA confirmed."""
+        target = "https://example.test"
+        object_id = "101"
+        resource_url = f"{target}/api/resources/{object_id}"
+
+        def mock_route(request):
+            auth = request.headers.get("Authorization", "")
+            if "token_a" in auth or "token_b" in auth:
+                return httpx.Response(201, json={"id": 101, "secret_key": "res_secret_xyz"})
+            return httpx.Response(401, json={"error": "Unauthorized"})
+
+        respx.get(resource_url).mock(side_effect=mock_route)
+
+        ep = Endpoint(
+            id="ep_001",
+            method="GET",
+            path="/api/resources/{id}",
+            source="crawler",
+        )
+        auth = {
+            "USER_A": AuthContext(id="USER_A", name="Alice", token="token_a", owned_objects=["101"]),
+            "USER_B": AuthContext(id="USER_B", name="Bob", token="token_b"),
+            "ANONYMOUS": AuthContext(id="ANONYMOUS", name="Anon", role="anonymous"),
+        }
+
+        ctx, client = _make_test_context([ep], auth, target_url=target)
+        try:
+            results = BOLATest().run(ctx)
+            assert len(results) == 1
+            assert results[0].status == FindingStatus.CONFIRMED
+            assert results[0].finding is not None
+        finally:
+            client.close()
+
+    @respx.mock
+    def test_bola_guid_endpoint_emits_potential_when_no_ids(self):
+        """F-04 Regression: Endpoints with {id} and no concrete IDs emit POTENTIAL finding."""
+        target = "https://example.test"
+        # All probes return 404 (simulating UUID-only target with unknown IDs)
+        respx.get(httpx.URL(f"{target}/api/users/.*")).respond(status_code=404, json={"error": "Not found"})
+
+        ep = Endpoint(
+            id="ep_guid",
+            method="GET",
+            path="/api/users/{id}",
+            source="openapi",
+        )
+        auth = {
+            "USER_A": AuthContext(id="USER_A", name="Alice", token="token_a"),
+            "USER_B": AuthContext(id="USER_B", name="Bob", token="token_b"),
+            "ANONYMOUS": AuthContext(id="ANONYMOUS", name="Anon", role="anonymous"),
+        }
+
+        ctx, client = _make_test_context([ep], auth, target_url=target)
+        try:
+            results = BOLATest().run(ctx)
+            assert len(results) == 1
+            assert results[0].status == FindingStatus.POTENTIAL
+            assert results[0].finding is not None
+            assert results[0].finding.status == FindingStatus.POTENTIAL
+            assert results[0].finding.confidence == Confidence.LOW
+        finally:
+            client.close()
+
 
 class TestOrchestratorBolaIntegration:
     """End-to-end integration: ScanSession executes BOLA and generates findings."""

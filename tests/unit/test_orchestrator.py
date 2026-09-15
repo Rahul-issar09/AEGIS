@@ -52,3 +52,29 @@ class TestScanSession:
         data = session.model_dump(mode="json")
         assert data["scan_id"] == "scan_001"
         assert data["status"] == "CREATED"
+
+
+class TestOrchestratorTestSelection:
+    """F-09 Regression: Explicit test enablement without silent defaults."""
+
+    def test_disabled_tests_are_respected(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from agent1.config import TestsConfig
+        from agent1.orchestrator import run_scan
+
+        config = ScanConfig(
+            target=TargetConfig(url="https://example.test"),
+            tests=TestsConfig(bola=False, ssrf=False),
+        )
+
+        # Mock discovery so run_scan completes quickly without network calls
+        from agent1.discovery.models import DiscoveryResult
+        monkeypatch.setattr(
+            "agent1.orchestrator.DiscoveryEngine.discover",
+            lambda self, url: DiscoveryResult(target=url, endpoints=[], duration_seconds=0.01),
+        )
+
+        result = run_scan(config)
+        assert result.session.status == ScanStatus.COMPLETED
+        # No tests ran because both bola and ssrf were False
+        assert len(result.findings) == 0

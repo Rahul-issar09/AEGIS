@@ -151,10 +151,25 @@ class _CanaryHTTPHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+def _get_outbound_ip() -> str:
+    """Determine the host's outbound/LAN IP address reachable by external targets."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
+    finally:
+        s.close()
+
+
 def _find_free_port() -> int:
-    """Find an available port on localhost."""
+    """Find an available port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
+        s.bind(("", 0))
         return s.getsockname()[1]
 
 
@@ -164,7 +179,7 @@ class EmbeddedCanaryServer:
     def __init__(
         self,
         recorder: CanaryRecorder,
-        host: str = "127.0.0.1",
+        host: str = "0.0.0.0",
         port: int | None = None,
     ) -> None:
         self.recorder = recorder
@@ -207,9 +222,16 @@ class EmbeddedCanaryServer:
         logger.info("canary.server_stopped")
 
     @property
+    def advertised_host(self) -> str:
+        """Get the host/IP used in generated URLs (resolves 0.0.0.0 to reachable IP)."""
+        if self.host in ("0.0.0.0", ""):
+            return _get_outbound_ip()
+        return self.host
+
+    @property
     def base_url(self) -> str:
         """Get the base URL for constructing canary targets."""
-        return f"http://{self.host}:{self.port}"
+        return f"http://{self.advertised_host}:{self.port}"
 
     def build_canary_url(self, token: str) -> str:
         """Construct a full canary URL for the given token."""

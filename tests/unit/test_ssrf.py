@@ -115,6 +115,14 @@ class TestCanarySystem:
         finally:
             server.stop()
 
+    def test_canary_url_uses_externally_reachable_address(self):
+        """F-05 Regression: Embedded canary server default must use externally reachable address."""
+        server = EmbeddedCanaryServer(CanaryRecorder())
+        url = server.build_canary_url("test_token")
+        assert "127.0.0.1" not in url
+        assert "0.0.0.0" not in url
+        assert "/canary/test_token" in url
+
 
 # =============================================================================
 # 2. SSRF Parameter Discovery Tests
@@ -290,6 +298,49 @@ class TestSSRFExecution:
 
         results = test.run(test_context)
         assert len(results) == 0
+
+    def test_ssrf_detected_with_delayed_callback(self, test_context):
+        """F-08 Regression: Async callback arriving during polling wait is captured."""
+        recorder = CanaryRecorder()
+        test = SSRFTest(canary_recorder=recorder, callback_wait_seconds=1.0)
+
+        ep = Endpoint(
+            id="ep_async_ssrf",
+            method="GET",
+            path="/api/v1/webhook",
+            query_parameters=["url"],
+        )
+        test_context.endpoints = [ep]
+
+        def mock_get(url, **kwargs):
+            from urllib.parse import parse_qs, urlparse
+            query = parse_qs(urlparse(url).query)
+            token = query["url"][0].split("/canary/")[-1]
+
+            def delayed_callback():
+                import time
+                time.sleep(0.05)
+                recorder.record_hit(
+                    token=token,
+                    client_ip="198.51.100.25",
+                    method="GET",
+                    path=f"/canary/{token}",
+                )
+
+            t = threading.Thread(target=delayed_callback)
+            t.daemon = True
+            t.start()
+
+            req = HttpRequest(method="GET", url=url)
+            resp = HttpResponse(status_code=202, headers={}, body='{"status":"queued"}')
+            return RequestResponse(request=req, response=resp)
+
+        test_context.http_client.get = MagicMock(side_effect=mock_get)
+        results = test.run(test_context)
+
+        confirmed = [r for r in results if r.status == FindingStatus.CONFIRMED]
+        assert len(confirmed) == 1
+        assert confirmed[0].finding is not None
 
 
 # =============================================================================

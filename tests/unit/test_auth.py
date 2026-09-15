@@ -129,3 +129,22 @@ contexts:
         contexts = load_auth_contexts("non_existent_file_xyz.yaml")
         assert len(contexts) == 1
         assert "ANONYMOUS" in contexts
+
+    def test_load_string_owned_objects_treated_as_single_item(self):
+        """F-10 Regression: String owned_objects is wrapped as single item list."""
+        yaml_content = """
+contexts:
+  USER_A:
+    name: "User A"
+    token: "token_a"
+    owned_objects: "101"
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            contexts = load_auth_contexts(temp_path)
+            assert contexts["USER_A"].owned_objects == ["101"]
+        finally:
+            Path(temp_path).unlink(missing_ok=True)

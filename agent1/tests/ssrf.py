@@ -231,12 +231,18 @@ class SSRFTest(SecurityTest):
             logger.debug(f"SSRF test request failed for {base_endpoint_url}: {e}")
             return None
 
-        # Give target server a moment to complete asynchronous/out-of-band request
-        if self.callback_wait_seconds > 0:
-            time.sleep(self.callback_wait_seconds)
-
-        # Check canary recorder for callback
+        # Poll canary recorder for callback up to callback_wait_seconds
         hits = self.canary_recorder.get_hits(token)
+        if not hits and self.callback_wait_seconds > 0:
+            deadline = time.monotonic() + self.callback_wait_seconds
+            poll_interval = 0.05
+            while time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                time.sleep(min(poll_interval, max(0.01, remaining)))
+                hits = self.canary_recorder.get_hits(token)
+                if hits:
+                    break
+
         if not hits:
             # No callback received → no confirmed SSRF
             logger.debug(

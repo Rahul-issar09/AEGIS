@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import socket
 import time
 from urllib.parse import urlparse
 
@@ -135,6 +136,8 @@ class ScopeController:
         self._validate_scheme(parsed.scheme)
         self._validate_host(parsed.hostname)
         self._validate_port(parsed.port, parsed.scheme)
+        self._validate_internal_network(parsed.hostname)
+        self._validate_path(parsed.path)
 
         logger.debug(
             "redirect.validated",
@@ -212,20 +215,27 @@ class ScopeController:
         if not hostname or self._policy.allow_internal_network:
             return
 
-        # Try to resolve hostname as an IP address
+        ips_to_check: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
         try:
-            addr = ipaddress.ip_address(hostname)
+            ips_to_check.append(ipaddress.ip_address(hostname))
         except ValueError:
-            # It's a domain name, not an IP — allow it
-            # (DNS resolution to internal IPs is a separate concern)
-            return
+            # It's a domain name, not an IP literal — resolve via DNS to check IP addresses
+            try:
+                addr_info = socket.getaddrinfo(hostname, None)
+                for res in addr_info:
+                    sockaddr = res[4]
+                    ip_str = sockaddr[0]
+                    ips_to_check.append(ipaddress.ip_address(ip_str))
+            except (socket.gaierror, OSError, ValueError):
+                return
 
-        for network in _INTERNAL_NETWORKS:
-            if addr in network:
-                raise ScopeViolation(
-                    f"Host '{hostname}' resolves to internal network "
-                    f"{network}. Set allow_internal_network=true to allow."
-                )
+        for addr in ips_to_check:
+            for network in _INTERNAL_NETWORKS:
+                if addr in network:
+                    raise ScopeViolation(
+                        f"Host '{hostname}' resolves to internal network "
+                        f"{network}. Set allow_internal_network=true to allow."
+                    )
 
     def _validate_request_count(self) -> None:
         if self._request_count >= self._policy.max_requests:

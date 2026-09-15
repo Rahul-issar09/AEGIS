@@ -16,7 +16,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from agent1.auth.context import load_auth_contexts
-from agent1.config import ScanConfig
+from agent1.config import ScanConfig, TestsConfig
 from agent1.discovery.engine import DiscoveryEngine
 from agent1.discovery.models import DiscoveryResult
 from agent1.evidence.collector import EvidenceCollector
@@ -226,9 +226,14 @@ def run_scan(
         )
 
         active_tests: list[SecurityTest] = []
-        if getattr(config.tests, "bola", True):
+        tests_cfg = config.tests
+        if tests_cfg is None:
+            logger.warning("ScanConfig.tests is None; defaulting to running enabled tests")
+            tests_cfg = TestsConfig()
+
+        if tests_cfg.bola:
             active_tests.append(BOLATest())
-        if getattr(config.tests, "ssrf", True):
+        if tests_cfg.ssrf:
             active_tests.append(SSRFTest())
 
         for test in active_tests:

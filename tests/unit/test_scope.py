@@ -188,9 +188,17 @@ class TestInternalNetworkValidation:
         ctrl.validate("GET", "http://10.0.0.1/api")
 
     def test_domain_name_not_blocked(self):
-        """Domain names are not resolved — only literal IPs are checked."""
+        """Domain names that do not resolve to private IPs are allowed."""
         ctrl = _make_controller()
         ctrl.validate("GET", "https://example.test/api")
+
+    def test_domain_resolving_to_private_ip_blocked(self, monkeypatch):
+        """F-01 Regression: Domain resolving to internal IP must be blocked."""
+        import socket
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [(None, None, None, None, ("10.0.0.1", 80))])
+        ctrl = _make_controller(allowed_hosts=frozenset({"internal.corp.test"}))
+        with pytest.raises(ScopeViolation, match="internal network"):
+            ctrl.validate("GET", "http://internal.corp.test/secret")
 
 
 # ── Redirect validation ───────────────────────────────────────────
@@ -207,6 +215,21 @@ class TestRedirectValidation:
         ctrl = _make_controller()
         with pytest.raises(ScopeViolation, match="Host"):
             ctrl.validate_redirect("https://evil.com/phish")
+
+    def test_redirect_to_internal_ip_blocked(self):
+        """F-02 Regression: Redirect to internal IP must be blocked."""
+        ctrl = _make_controller(allowed_hosts=frozenset({"example.test", "127.0.0.1"}))
+        with pytest.raises(ScopeViolation, match="internal network"):
+            ctrl.validate_redirect("http://127.0.0.1/admin")
+
+    def test_redirect_to_excluded_path_blocked(self):
+        """F-02 Regression: Redirect to excluded path must be blocked."""
+        ctrl = _make_controller(
+            allowed_hosts=frozenset({"example.test"}),
+            excluded_paths=frozenset({"/admin"}),
+        )
+        with pytest.raises(ScopeViolation, match="excluded by scope"):
+            ctrl.validate_redirect("https://example.test/admin")
 
 
 # ── Request count limit ────────────────────────────────────────────

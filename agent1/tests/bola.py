@@ -116,9 +116,18 @@ class BOLATest(SecurityTest):
                     test_object_ids.append(concrete_id)
 
             # 3. Fallback common IDs if none known
+            has_explicit_ids = bool(test_object_ids)
             if not test_object_ids:
-                test_object_ids = ["101", "1", "100", "123"]
+                test_object_ids = [
+                    "101",
+                    "1",
+                    "100",
+                    "123",
+                    "00000000-0000-0000-0000-000000000001",
+                    "11111111-1111-1111-1111-111111111111",
+                ]
 
+            ep_results = []
             for obj_id in test_object_ids:
                 result = self._test_single_object(
                     context=context,
@@ -129,10 +138,44 @@ class BOLATest(SecurityTest):
                     anonymous=anonymous,
                 )
                 if result:
+                    ep_results.append(result)
                     results.append(result)
                     # If confirmed vulnerability found for this endpoint, move to next endpoint
                     if result.status == FindingStatus.CONFIRMED:
                         break
+
+            # If no explicit IDs were known and no fallback IDs could establish baseline,
+            # emit a POTENTIAL finding so GUID/custom identifier endpoints aren't silently dropped
+            if not has_explicit_ids and not ep_results:
+                finding_id = f"finding_bola_{uuid.uuid4().hex[:6]}"
+                finding = Finding(
+                    finding_id=finding_id,
+                    scan_id=context.scan_session.scan_id,
+                    title="Potential BOLA Endpoint Requires Object Identifiers",
+                    vulnerability_type=VulnerabilityType.BOLA,
+                    severity=Severity.LOW,
+                    confidence=Confidence.LOW,
+                    status=FindingStatus.POTENTIAL,
+                    endpoint=EndpointInfo(method=ep.method, path=ep.path),
+                    description=(
+                        f"Endpoint {ep.method} {ep.path} contains object identifier placeholders, "
+                        f"but no valid IDs were configured in auth context and fallback probes failed to establish baseline."
+                    ),
+                    impact="Potential unauthorized access cannot be verified without concrete object identifiers.",
+                    remediation="Provide valid object identifiers in owned_objects configuration for auth contexts.",
+                )
+                potential_res = TestResult(
+                    test_id=f"bola_{ep.id}_unresolved",
+                    test_name=self.name,
+                    vulnerability_type=self.vulnerability_type,
+                    status=FindingStatus.POTENTIAL,
+                    severity=Severity.LOW,
+                    confidence=Confidence.LOW,
+                    endpoint=EndpointInfo(method=ep.method, path=ep.path),
+                    finding=finding,
+                    details={"endpoint": ep.path, "reason": "No valid object IDs resolved"},
+                )
+                results.append(potential_res)
 
         return results
 
@@ -169,8 +212,8 @@ class BOLATest(SecurityTest):
             logger.debug(f"User A request failed for {test_url}: {e}")
             return None
 
-        # Verify baseline access: User A must successfully access their object
-        if req_resp_a.response.status_code != 200:
+        # Verify baseline access: User A must successfully access their object (200 or 201)
+        if req_resp_a.response.status_code not in (200, 201):
             logger.debug(
                 "bola.baseline_failed",
                 extra={"url": test_url, "status": req_resp_a.response.status_code},
@@ -184,7 +227,7 @@ class BOLATest(SecurityTest):
         ev_a = context.evidence_collector.collect_request_response(
             req_resp_a,
             test_id=test_id,
-            observation=f"User A ('{user_a.name}') successfully accessed object '{object_id}' (HTTP 200 OK)",
+            observation=f"User A ('{user_a.name}') successfully accessed object '{object_id}' (HTTP {req_resp_a.response.status_code})",
             confidence=Confidence.HIGH,
             metadata={"auth_context": user_a.id, "object_id": object_id, "role": "owner"},
         )
@@ -195,7 +238,7 @@ class BOLATest(SecurityTest):
         is_public_endpoint = False
         try:
             req_resp_anon = context.http_client.get(test_url)
-            if req_resp_anon.response.status_code == 200:
+            if req_resp_anon.response.status_code in (200, 201):
                 diff_anon = compute_response_diff(req_resp_a.response, req_resp_anon.response)
                 # If unauthenticated user gets identical data, it is a public endpoint (PRD Section 20)
                 if diff_anon.body_similarity > 0.90:
@@ -236,8 +279,8 @@ class BOLATest(SecurityTest):
                 details={"outcome": "protected", "user_b_status": req_resp_b.response.status_code},
             )
 
-        # If User B receives 200 OK:
-        if req_resp_b.response.status_code == 200:
+        # If User B receives 200 OK or 201 Created:
+        if req_resp_b.response.status_code in (200, 201):
             # Rule out false positive: generic error disguised in 200
             if _is_generic_error_body(req_resp_b.response.body):
                 return None
@@ -245,12 +288,12 @@ class BOLATest(SecurityTest):
             # Compute response diff
             diff_ab = compute_response_diff(req_resp_a.response, req_resp_b.response)
 
-            # Both got 200 OK with substantial similarity, or User B accessed User A's private data
+            # Both got 200/201 with substantial similarity, or User B accessed User A's private data
             # Record User B evidence
             ev_b = context.evidence_collector.collect_request_response(
                 req_resp_b,
                 test_id=test_id,
-                observation=f"User B ('{user_b.name}') unauthorizedly accessed User A's object '{object_id}' (HTTP 200 OK)",
+                observation=f"User B ('{user_b.name}') unauthorizedly accessed User A's object '{object_id}' (HTTP {req_resp_b.response.status_code})",
                 confidence=Confidence.CONFIRMED,
                 metadata={"auth_context": user_b.id, "object_id": object_id, "role": "attacker"},
             )

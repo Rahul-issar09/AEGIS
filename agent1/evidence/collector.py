@@ -263,8 +263,17 @@ class EvidenceCollector:
         return self._evidence.get(evidence_id)
 
     def get_all(self) -> list[Evidence]:
-        """Retrieve all evidence for this scan."""
+        """Retrieve all evidence for this scan (raw, unredacted).
+
+        Warning:
+            Returns raw evidence that may contain unredacted secrets or credentials.
+            For reporting, exporting, or serialization, always use get_all_redacted().
+        """
         return list(self._evidence.values())
+
+    def get_all_raw(self) -> list[Evidence]:
+        """Explicit alias for get_all() indicating raw unredacted evidence is returned."""
+        return self.get_all()
 
     def get_by_scan(self, scan_id: str) -> list[Evidence]:
         """Retrieve all evidence for a specific scan ID."""

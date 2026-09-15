@@ -131,6 +131,16 @@ def load_auth_contexts(path: str | Path | None) -> dict[str, AuthContext]:
         headers = ctx_data.get("headers", {})
         token = ctx_data.get("token")
         owned = ctx_data.get("owned_objects", [])
+        if isinstance(owned, str):
+            logger.warning(
+                f"Auth context '{ctx_id}' has string owned_objects ('{owned}'); treating as single item"
+            )
+            owned = [owned]
+        elif not isinstance(owned, (list, tuple, set)):
+            logger.warning(
+                f"Auth context '{ctx_id}' has non-iterable owned_objects ({type(owned).__name__}); wrapping in list"
+            )
+            owned = [owned]
 
         # Ensure owned_objects are strings
         owned_str = [str(o) for o in owned]
